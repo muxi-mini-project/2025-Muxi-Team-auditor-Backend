@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"context"
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -16,13 +17,18 @@ type RedisJWTHandler struct {
 	cmd redis.Cmdable // Redis 命令接口，用于与 Redis 进行交互
 	Jwt *JWT
 }
+type RedisJWTHandlerInterface interface {
+	ClearToken(ctx *gin.Context) error
+	ParseToken(ctx *gin.Context) (UserClaims, error)
+	SetJWTToken(ctx *gin.Context, uid uint, name string, userRole int) error
+	CheckSession(ctx *gin.Context, ssid string) (bool, error)
+}
 
 // NewRedisJWTHandler 创建并返回一个新的 RedisJWTHandler 实例
 func NewRedisJWTHandler(cmd *redis.Client, conf *config.JWTConfig) *RedisJWTHandler {
-
 	return &RedisJWTHandler{
 		cmd: cmd, //redis实体
-		Jwt: NewJWT(time.Duration(conf.Timeout), conf.SecretKey),
+		Jwt: NewJWT(time.Duration(conf.Timeout)*time.Second, conf.SecretKey),
 	}
 }
 
@@ -31,7 +37,11 @@ func (r *RedisJWTHandler) ClearToken(ctx *gin.Context) error {
 	// 要求客户端设置为空
 	ctx.Header("JWT-Token", "")
 	// 在 Redis 中记录登出的会话
-	uc := ctx.MustGet("user").(UserClaims)
+	uc := ctx.MustGet("ginx_user").(UserClaims)
+	err := r.cmd.Del(ctx, "login:"+BASENAME+uc.Email).Err()
+	if err != nil {
+		return err
+	}
 	return r.cmd.Set(ctx, BASENAME+uc.ID, "expired", uc.ExpiresAt.Time.Sub(time.Now())).Err()
 }
 
@@ -42,8 +52,6 @@ func (r *RedisJWTHandler) ParseToken(ctx *gin.Context) (UserClaims, error) {
 	if authCode == "" {
 		return UserClaims{}, errors.New("Authorization请求头缺失")
 	}
-
-	//分割获取token
 	segs := strings.Split(authCode, " ")
 	if len(segs) != 2 {
 		return UserClaims{}, errors.New("请求头格式错误!")
@@ -63,8 +71,8 @@ func (r *RedisJWTHandler) ParseToken(ctx *gin.Context) (UserClaims, error) {
 }
 
 // SetJWTToken 生成并设置用户的 JWT
-func (r *RedisJWTHandler) SetJWTToken(ctx *gin.Context, uid uint, name string, userRole int) error {
-	tokenStr, err := r.Jwt.SetJWTToken(uid, name, userRole)
+func (r *RedisJWTHandler) SetJWTToken(ctx *gin.Context, uid uint, email string, userRole int) error {
+	tokenStr, err := r.Jwt.SetJWTToken(uid, email, userRole)
 	if err != nil {
 		return err
 	}
@@ -76,4 +84,34 @@ func (r *RedisJWTHandler) SetJWTToken(ctx *gin.Context, uid uint, name string, u
 func (r *RedisJWTHandler) CheckSession(ctx *gin.Context, ssid string) (bool, error) {
 	val, err := r.cmd.Exists(ctx, BASENAME+ssid).Result()
 	return val > 0, err
+}
+
+//	func (r *RedisJWTHandler) Login(ctx context.Context, email string) error {
+//		err := r.cmd.Set(ctx, "login:"+BASENAME+email, "logged_in", time.Hour).Err()
+//		return err
+//	}
+//
+//	func (r *RedisJWTHandler) CheckLogin(ctx context.Context, email string) error {
+//		key := "login:" + email
+//
+//		exists, err := r.cmd.Exists(ctx, key).Result()
+//		if err != nil {
+//			return err
+//		}
+//		if exists > 0 {
+//			return errors.New("已有用户登录")
+//		}
+//		return nil
+//	}
+func (r *RedisJWTHandler) GetSByKey(ctx context.Context, cacheKey string) (string, error) {
+	re, err := r.cmd.Get(ctx, cacheKey).Result()
+	if err != nil {
+		return "", err
+	}
+	return re, nil
+}
+func (r *RedisJWTHandler) SetByKey(ctx context.Context, cacheKey string, list []byte) error {
+
+	err := r.cmd.Set(ctx, cacheKey, list, time.Hour).Err()
+	return err
 }

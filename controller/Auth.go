@@ -2,9 +2,8 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"muxi_auditor/config"
-	"muxi_auditor/pkg/ginx"
-	"muxi_auditor/pkg/jwt"
 	//"errors"
 	"github.com/gin-gonic/gin"
 	//api_errors "muxi_auditor/api/errors"
@@ -14,12 +13,6 @@ import (
 	"muxi_auditor/service"
 )
 
-type UserInfo struct {
-	Token string `json:"token"`
-	Name  string `json:"name"`
-	Role  int    `json:"role"`
-	Email string `json:"email"`
-}
 type AuthController struct {
 	client  *client.OAuthClient
 	service AuthService
@@ -27,11 +20,8 @@ type AuthController struct {
 }
 
 type AuthService interface {
-	Login(ctx context.Context, email string) (string, string, int, error)
-	Register(ctx context.Context, email string, username string) (string, error)
+	Login(ctx context.Context, email string) (string, int, error)
 	Logout(ctx *gin.Context) error
-	UpdateMyInfo(ctx context.Context, req request.UpdateUserReq, id uint) error
-	GetQiToken(ctx context.Context) (string, error)
 }
 
 func NewOAuthController(client *client.OAuthClient, service *service.AuthService) *AuthController {
@@ -41,43 +31,53 @@ func NewOAuthController(client *client.OAuthClient, service *service.AuthService
 	}
 }
 
+// Login 用户登录
+// @Summary 用户登录
+// @Description 通过邮箱登录，返回用户的 Token
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param login body request.LoginReq true "登录请求体"
+// @Success 200 {object} response.Response{data=string} "成功返回Token"
+// @Success 20001 {object} response.Response{data=string} "审核中"
+// @Failure 400 {object} response.Response{data=nil} "错误信息"
+// @Router /api/v1/auth/login [post]
 func (c *AuthController) Login(ctx *gin.Context, req request.LoginReq) (response.Response, error) {
 
 	////随便写的逻辑,你需要进行更改
 	accessToken, err := c.client.GetOAuth(req.Code)
 	if err != nil {
-		return response.Response{}, err
+		return response.Response{
+			Msg:  "获取accessToken失败",
+			Data: err.Error(),
+		}, err
 	}
 	email, err := c.client.GetEmail(accessToken)
-	if err != nil {
-		return response.Response{}, err
+	if err != nil || email == "" {
+		return response.Response{
+			Msg: "获取email失败",
+		}, err
 	}
-	username, token, role, err := c.service.Login(ctx, email)
+	token, role, err := c.service.Login(ctx, email)
+
 	if err != nil {
-		return response.Response{}, err
+		return response.Response{
+			Msg:  "login服务出错",
+			Data: err.Error(),
+		}, err
 	}
 	if role == 0 {
 		return response.Response{
-			Msg:  "",
+			Msg:  "审核中",
 			Code: 20001,
-			Data: UserInfo{
-				Token: "",
-				Name:  username,
-				Role:  0,
-				Email: email,
-			},
+			Data: "",
 		}, nil
 	}
 
 	return response.Response{
 		Msg:  "",
 		Code: 200,
-		Data: UserInfo{
-			Token: token,
-			Name:  username,
-			Role:  role,
-			Email: email,
-		},
+		Data: token,
 	}, nil
 	//返回
 	//return response.Response{
@@ -86,76 +86,31 @@ func (c *AuthController) Login(ctx *gin.Context, req request.LoginReq) (response
 	//	Data: nil,
 	//}, nil
 }
-func (c *AuthController) Register(ctx *gin.Context, req request.RegisterReq) (response.Response, error) {
 
-	token, err := c.service.Register(ctx, req.Email, req.Name)
-	if err != nil {
-		return response.Response{}, err
-	}
-	return response.Response{
-		Msg:  "",
-		Code: 200,
-		Data: UserInfo{
-			Token: token,
-			Name:  req.Name,
-			Role:  0,
-		},
-	}, nil
-}
+// Logout 用户登出
+// @Summary 用户登出
+// @Description 清除用户 Token
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Success 200 {object} response.Response "成功登出"
+// @Failure 400 {object} response.Response "错误信息"
+// @Security ApiKeyAuth
+// @Router /api/v1/auth/logout [get]
 func (c *AuthController) Logout(ctx *gin.Context) (response.Response, error) {
-	_, err := ginx.GetClaims[jwt.UserClaims](ctx)
+	err := c.service.Logout(ctx)
+	fmt.Println(err)
 	if err != nil {
 		return response.Response{
 			Msg:  "",
-			Code: 40001,
-			Data: nil,
+			Code: 400,
+			Data: err.Error(),
 		}, err
 	}
-	err = c.service.Logout(ctx)
-	if err != nil {
-		return response.Response{
-			Msg:  "",
-			Code: 40001,
-			Data: nil,
-		}, err
-	}
+	fmt.Println(2)
 	return response.Response{
 		Msg:  "成功登出",
 		Code: 200,
 		Data: nil,
 	}, nil
-}
-func (c *AuthController) UpdateMyInfo(ctx *gin.Context, req request.UpdateUserReq) (response.Response, error) {
-	token, err := ginx.GetClaims[jwt.UserClaims](ctx)
-	if err != nil {
-		return response.Response{
-			Msg:  "Invalid or expired token",
-			Code: 40001,
-			Data: nil,
-		}, err
-	}
-	err = c.service.UpdateMyInfo(ctx, req, token.Uid)
-	if err != nil {
-		return response.Response{}, err
-	}
-	return response.Response{
-		Msg:  "更新用户信息成功",
-		Code: 200,
-		Data: nil,
-	}, nil
-}
-func (c *AuthController) GetQiToken(ctx *gin.Context) (response.Response, error) {
-	token,err:=c.service.GetQiToken(ctx)
-	if err != nil {
-		return response.Response{
-			Code: 400,
-			Data: nil,
-			Msg: "获取图床token失败",
-		}, err
-	}
-	return response.Response{
-		Code: 200,
-		Data: token,
-		Msg:"获取成功",
-	},nil
 }

@@ -7,6 +7,7 @@
 package main
 
 import (
+	"gorm.io/gorm"
 	"muxi_auditor/client"
 	"muxi_auditor/config"
 	"muxi_auditor/controller"
@@ -34,23 +35,33 @@ func InitWebServer(confPath string) *App {
 	redisClient := ioc.InitCache(cacheConfig)
 	jwtConfig := config.NewJWTConf(vipperSetting)
 	redisJWTHandler := jwt.NewRedisJWTHandler(redisClient, jwtConfig)
-	qiNiuYunConfig := config.NewQiniuConf(vipperSetting)
-	authService := service.NewAuthService(userDAO, redisJWTHandler, qiNiuYunConfig)
+	authService := service.NewAuthService(userDAO, redisJWTHandler)
 	authController := controller.NewOAuthController(oAuthClient, authService)
 	userService := service.NewUserService(userDAO, redisJWTHandler)
 	userController := controller.NewUserController(userService)
 	itemService := service.NewItemService(userDAO, redisJWTHandler)
 	itemController := controller.NewItemController(itemService)
+	qiNiuYunConfig := config.NewQiniuConf(vipperSetting)
+	tubeService := service.NewTubeService(userDAO, redisJWTHandler, qiNiuYunConfig)
+	tubeController := controller.NewTuberController(tubeService)
 	authMiddleware := middleware.NewAuthMiddleware(redisJWTHandler)
 	middlewareConf := config.NewMiddleWareConf(vipperSetting)
 	corsMiddleware := middleware.NewCorsMiddleware(middlewareConf)
 	prometheusConfig := config.NewPrometheusConf(vipperSetting)
 	prometheus := ioc.InitPrometheus(prometheusConfig)
 	loggerMiddleware := middleware.NewLoggerMiddleware(logger, prometheus)
-	projectService := service.NewProjectService(userDAO, redisJWTHandler)
+	userDAOInterface := ProvideUserDAO(db)
+	projectService := service.NewProjectService(userDAOInterface, redisJWTHandler)
 	projectController := controller.NewProjectController(projectService)
-	engine := router.NewRouter(authController, userController, itemController, authMiddleware, corsMiddleware, loggerMiddleware, projectController)
+	engine := router.NewRouter(authController, userController, itemController, tubeController, authMiddleware, corsMiddleware, loggerMiddleware, projectController)
 	appConf := config.NewAppConf(vipperSetting)
 	app := NewApp(engine, appConf)
 	return app
+}
+
+// wire.go:
+
+// 提供 dao.UserDAO 的 provider
+func ProvideUserDAO(db *gorm.DB) dao.UserDAOInterface {
+	return &dao.UserDAO{DB: db}
 }
